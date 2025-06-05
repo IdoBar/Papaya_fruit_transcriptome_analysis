@@ -1,0 +1,582 @@
+---
+title: "Transcriptome analyses of Papaya fruit samples"
+author: "Josh Lomax and Ido Bar"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+always_allow_html: yes
+output: 
+    bookdown::html_document2:
+      includes:
+       in_header: style/header.html
+       after_body: style/external-links-js.html
+      df_print: paged
+      theme: 
+        version: 5
+        bootswatch: simplex #sandstone #zephyr # yeti # united
+        # primary: "#6CC3D4"
+      highlight: tango
+      css: "style/style.css"
+      toc: true
+      toc_float: true
+      toc_depth: 4
+  #    highlight: pygments
+      number_sections: true
+      code_folding: hide
+#      keep_md: true
+bibliography: ["style/RNAseq_references.bib", "style/pseudo_counts.bib",  "style/trans_assembly_papers.bib", "style/transcriptome_assembly_evaluation.bib","style/comparative_genomics.bib", "style/papaya_genomics.bib"]
+csl: style/springer-basic-improved-author-date-with-italic-et-al-period.csl
+---
+
+```{r setup, include=FALSE}
+devtools::source_gist("7f63547158ecdbacf31b54a58af0d1cc", filename = "util.R")
+knitr::opts_chunk$set(list(echo = TRUE, eval=FALSE, message=FALSE))
+fav_packages <- c('tidyverse', 'rentrez', 'taxonomizr')
+# pak::pak(fav_packages)
+pacman::p_load(char = basename(fav_packages))
+
+```
+
+# Experimental Design
+
+## Aims
+
+-   Identify genes that play a role in metabolic pathways of key flavour-determining volatiles, sugars and metabolites in papaya      
+
+### Objectives
+
+1. Assemble the _Carica papaya_ mature fruit transcriptome  
+2. Identify genes that play a role in metabolic pathways of key flavour-determining volatiles, sugars and metabolites in papaya through network analysis of co-expressed and differential expression of genes correlated to metabolites' concentration in 10 papaya genotypes    
+3. Develop pipeline that uses state-of-the-art graph genome approach to utilise papaya pangenome as reference for gene expression analysis      
+
+
+## Analysis Pipeline
+
+### General overview:
+
+1.  Data pre-processing:  
+    a.  Quality check  
+    b.  Adaptor trimming  
+    c.  Post-trim quality check  
+2.  Genome-guided transcriptome assembly 
+3.  Homology-based functional annotation of transcripts  
+4.  Generate counts table per gene (based on assembled transcriptome)  
+5.  Construction of co-expressed gene networks  
+6.  Correlation of gene networks to metabolites' concentrations  
+5.  Differential expression analysis of key gene in metabolic pathways of target metabolites  
+6.  Summary statistics and visualisation  
+
+## Methods
+### RNA Extraction and Sequencing
+RNA was extracted from 5 ripe papaya (_Carica papaya_) fruit from 10 cultivars and advanced breeding lines. RNA was extracted using the RNAzol method. The RNA was sent for sequencing at the State Agricultural Biotechnology Centre ([SABC](https://www.murdoch.edu.au/research/sabc)) at Murdoch University (led by Prof. Rajeev Varshney). RNA libraries were prepared and sequenced on an MGI DNBSEQ-T7, producing 150 bp paired-end reads.
+
+The reads were downloaded to the QCIF High Performance Computing (HPC) cluster ([Bunya](https://github.com/UQ-RCC/hpc-docs/blob/main/guides/Bunya-User-Guide.md#general-hpc-information)) for bioinformatics processing and analyses.
+
+<!-- , following the guidelines by Harvard Informatics (see [link](https://github.com/harvardinformatics/TranscriptomeAssemblyTools)) [@freedmanErrorNoiseBias2021].    -->
+
+<!-- >These included error-correction with Rcorrect v1.5.0 [@songRcorrectorEfficientAccurate2015a] of the reads from each set and removal of "unfixable" reads. (?) -->
+
+### Reference Transcriptome Annotation
+The most recent and complete reference genome of _C. papaya_ (accession number GWHBFSD00000000 for Sunset genome; see @yueSunUpSunsetGenomes2022) was downloaded along with the predicted gene models and annotations from a Genome Warehouse (GWH) database in [BIG data Center](https://ngdc.cncb.ac.cn/gwh/).   
+*Use Holland genome or pangenome once available* 
+
+```{bash prep-genome}
+CONDA_NAME="ref-trans" # genomics
+mamba create -n $CONDA_NAME hisat2 stringtie htseq psiclass subread gffcompare biobambam fastp rseqc bedops samtools gffread
+WORKDIR="/scratch/project/adna/Papaya/SunSet_reference_genome"
+TRANS="$WORKDIR/GWHBFSD00000000.RNA.fasta"
+GENOME="$WORKDIR/GWHBFSD00000000.genome.fasta"
+GFF="$WORKDIR/GWHBFSD00000000.gff"
+
+cd $WORKDIR
+CORES=8
+MEM=16
+WALLTIME=2:00:00
+JOBNAME="prep-sunset-genome"
+echo "gzip -cd $GFF.gz > $GFF
+gzip -cd $GENOME.gz > $GENOME
+samtools faidx $GENOME
+gzip -cd $TRANS.gz > $TRANS
+gff2bed < $GFF > ${GFF%.*}.bed
+gffread -E $GFF -T -o ${GFF%.*}.gtf
+extract_splice_sites.py ${GFF%.*}.gtf > ${GFF%.*}.ss 
+extract_exons.py ${GFF%.*}.gtf > ${GFF%.*}.exon" > $JOBNAME.cmds 
+
+# Prepare a general Slurm script
+echo '#!/bin/bash --login
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --output=%x.%A.%a.log'"
+#SBATCH --account=a_agri_genomics
+#SBATCH --partition=general
+
+set -Eeo pipefail
+source ~/.bashrc
+conda activate \$CONDA_NAME
+cd \$SLURM_SUBMIT_DIR
+cat \$CMDS_FILE | bash" > ~/bin/serial_jobs_run.slurm
+chmod +x ~/bin/serial_jobs_run.slurm # make it available from any folder
+# submit the job to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+# Prepare a general array Slurm script
+echo '#!/bin/bash --login
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --output=%x.%A.%a.log'"
+#SBATCH --account=a_agri_genomics
+#SBATCH --partition=general
+
+set -Eeo pipefail
+source ~/.bashrc
+conda activate \$CONDA_NAME
+cd \$SLURM_SUBMIT_DIR
+gawk -v ARRAY_IND=\$SLURM_ARRAY_TASK_ID 'NR==ARRAY_IND' \$CMDS_FILE | bash" > ~/bin/array.slurm
+chmod +x ~/bin/array.slurm # make it available from any folder
+
+```
+
+#### Assemble reference-guided transcriptome{#tuxedo}
+The reads were aligned to the reference genome with `HISAT2` [@kimGraphbasedGenomeAlignment2019], followed by the reconstruction of transcripts with `StringTie` (or [`PsiCLASS`](https://github.com/splicebox/PsiCLASS)). Transcript and gene counts were generated from the alignments using `featurecounts` [@liaoFeatureCountsEfficientGeneral2014], [`HTSeq-count`](http://htseq.readthedocs.io/en/release_0.9.1/count.html) [@andersHTSeqPythonFramework2015] or `Ballgown`, as detailed in @perteaTranscriptlevelExpressionAnalysis2016. 
+
+
+```{bash ref-based-trans}
+CONDA_NAME="ref-trans" # genomics
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq"
+FQ_DIR="$WORKDIR/papaya_rnaseq"
+TRANS="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.RNA.fasta"
+GENOME="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.genome.fasta"
+GFF="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.gff"
+
+mkdir -p $FQ_DIR/fastp/QC && cd $FQ_DIR
+
+# process the reads
+NCORES=12
+MEM=64
+WALLTIME=2:00:00
+JOBNAME="Cpap-fastp"
+# find $WORKDIR/combined_reads -maxdepth 1 -name "*_R1.fq.gz" | parallel --dry-run
+parallel --dry-run --rpl "{sample} s:.+/(.+).R1.fq.gz:\1:" --rpl "{file2} s:.R1:.R2:" "fastp -i {} -I {file2} --detect_adapter_for_pe -c -l 30 -p -w \$SLURM_CPUS_PER_TASK -z 7 -o $FQ_DIR/fastp/{sample}_R1.trimmed.fastq.gz -O $FQ_DIR/fastp/{sample}_R2.trimmed.fastq.gz -j $FQ_DIR/fastp/QC/{sample}.fastp.json" ::: $(ls -1 $FQ_DIR/*R1.fq.gz) > $JOBNAME.cmds 
+
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+# align the reads to the genome
+ASS="Papaya_fruit_Sunset_assembly"
+mkdir -p ${WORKDIR}/${ASS}/aligned_reads ${WORKDIR}/${ASS}/assembly 
+cd ${WORKDIR}/${ASS}
+CONDA_NAME="ref-trans" # genomics
+NCORES=10
+MEM=64
+WALLTIME=2:00:00
+JOBNAME="hisat-build"
+# prepare the genome index 
+echo "hisat2-build -p \$[SLURM_CPUS_PER_TASK] --ss ${GFF%.*}.ss --exon ${GFF%.*}.exon $GENOME ${GFF%.*}-ht2-index" > $JOBNAME.cmds 
+# submit the job to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+# align the reads to the genome
+NCORES=12
+MEM=64
+WALLTIME=5:00:00
+JOBNAME="hisat-align"
+# find $WORKDIR/combined_reads -maxdepth 1 -name "*_R1.fq.gz" | parallel --dry-run
+parallel --dry-run --rpl "{sample} s:.+/(.+)_R1.trimmed.fastq.gz:\1:" --rpl "{file2} s:_R1:_R2:" "hisat2 --dta -p \$[SLURM_CPUS_PER_TASK] -x ${GFF%.*}-ht2-index -1 {} -2 {file2} | bamsormadup tmpfile=\$TMPDIR/bamsormadup_\$(hostname)_\$SLURM_ARRAY_JOB_ID inputformat=sam threads=\$[SLURM_CPUS_PER_TASK - 2] indexfilename=aligned_reads/{sample}.dedup.csorted.bam.bai > aligned_reads/{sample}.dedup.csorted.bam" ::: $(ls -1 $FQ_DIR/fastp/*_R1.trimmed.fastq.gz) > $JOBNAME.cmds 
+
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+# assemble transcripts with StringTie
+NCORES=12
+MEM=64
+WALLTIME=2:00:00
+JOBNAME="stringtie"
+parallel --dry-run --rpl "{sample} s:.+/(.+).dedup.csorted.bam:\1:" "stringtie {} --rf -l {sample} -p \$[SLURM_CPUS_PER_TASK] -G $GFF -o assembly/{sample}.gtf" ::: $(ls -1 aligned_reads/*.dedup.csorted.bam) > $JOBNAME.cmds 
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+# find which jobs failed
+FAILED_TASKS=$(sacct -n -X -j $ARRAY_ID -o state%20,jobid%20 | grep -v COMPLETED | gawk '{print $2}' | cut -d"_" -f2 | paste -s -d ',')
+
+# merge all transcripts from the different samples
+find assembly -name "*.gtf" > mergelist.txt
+NCORES=12
+MEM=64
+WALLTIME=2:00:00
+JOBNAME="stringtie-merge"
+
+echo "stringtie --merge -p \$[SLURM_CPUS_PER_TASK] -G $GFF -o ${ASS}_stringtie_merged.gtf mergelist.txt; gffcompare -r $GFF -G -o merged ${ASS}_stringtie_merged.gtf" > $JOBNAME.cmds 
+# submit to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+    
+# Estimate transcfript abundance with Ballgown
+JOBNAME="ballgown"
+
+parallel --dry-run --rpl "{sample} s:.+/(.+).dedup.csorted.bam:\1:" "mkdir -p ballgown/{sample}; stringtie -e -B  -p \$[SLURM_CPUS_PER_TASK] -G ${ASS}_stringtie_merged.gtf -o ballgown/{sample}/{sample}.gtf {}" ::: $(ls -1 aligned_reads/*.dedup.csorted.bam) > $JOBNAME.cmds 
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+mkdir logs && mv *.log logs/
+
+```
+ 
+
+#### MutilQC{#multiqc}
+Quality metrics were collected from the raw read QC and alignment steps and were consolidated into a single, interactive report for each batch using MultiQC v1.21 [@ewelsMultiQCSummarizeAnalysis2016]. 
+
+```{bash multiqc}
+CONDA_NAME="genomics" # 
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq"
+ASS="Papaya_fruit_Sunset_assembly"
+cd $WORKDIR/$ASS
+
+# Alignmet QC
+NCORES=12
+MEM=64
+WALLTIME=2:00:00
+JOBNAME="align-qc"
+
+parallel --dry-run --rpl "{sample} s:.+/(.+).dedup.csorted.bam:\1:" "unset DISPLAY ; qualimap bamqc -bam {} --java-mem-size=32G -c -gff ${GFF%.*}.bed -outdir aligned_reads/{sample}_bamqc; mosdepth -t \$SLURM_CPUS_PER_TASK -x -n aligned_reads/{sample}_bamqc/{sample} {}" ::: $(ls -1 aligned_reads/*.dedup.csorted.bam) > $JOBNAME.cmds 
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+# set job resources
+NCORES=8
+MEM=32
+WALLTIME="10:00:00"
+JOBNAME="Multiqc_Papaya_RNAseq"
+
+# link fastp results
+ln -s $FQ_DIR/fastp/QC ./
+
+# submit it as a Slurm job
+echo "multiqc --interactive --force -i $JOBNAME -o $JOBNAME ." > $JOBNAME.cmds
+# submit the job 
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | cut -f 4 -d " " )
+# Done!
+
+# Copy files to SharePoint
+rclone copy -P --exclude "**/*.html" $WORKDIR/$ASS "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/$ASS"
+# Copy html files to SharePoint
+rclone copy -P --ignore-checksum --ignore-size --include "**/*.html" $WORKDIR/$ASS "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/$ASS"
+```
+
+The assembled genome-guided transcriptome was extracted from the reference genome using `gffread` [@perteaGFFUtilitiesGffRead2020]
+
+```{bash extract-trans}
+CONDA_NAME="ref-trans" # genomics
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq"
+GENOME="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.genome.fasta"
+ASS="Papaya_fruit_Sunset_assembly"
+GFF="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.gff"
+
+cd $WORKDIR/$ASS
+
+NCORES=4
+MEM=16
+WALLTIME=2:00:00
+JOBNAME="stringtie-gtf2fasta"
+
+echo "gffread -w ${ASS}_stringtie_merged.fa -g $GENOME ${ASS}_stringtie_merged.gtf" > $JOBNAME.cmds 
+# submit to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+```
+
+#### Predict proteins with ORFanage
+The gene annotation of the assembled transcriptome was 'sanitized' using `gffread` [@perteaGFFUtilitiesGffRead2020], followed by [ORFanage](https://github.com/alevar/ORFanage) to predict open reading frames of proteins (see detailed instructions in the [Documentation](https://orfanage.readthedocs.io/en/latest/user/quickstart.html) and the publication by @varabyouInvestigatingOpenReading2023).  
+*Consider using [AGAT](https://agat.readthedocs.io/en/latest/agat_for_you.html) to sanitize and convert the gene annotation files `gtf` to `gff`*
+
+```{bash predict-orf}
+# setup environment
+CONDA_NAME="ref-trans"
+# mamba install -n $CONDA_NAME orfanage 
+GENOME="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.genome.fasta"
+GFF="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.gff"
+ASS="Papaya_fruit_Sunset_assembly"
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS"
+TRANS="$WORKDIR/${ASS}_stringtie_merged.fa"
+
+JOBNAME="orfanage"
+NCORES=8
+MEM=32
+WALLTIME=10:00:00
+echo "gffread -g $GENOME --adj-stop -T -F -J -o ${GFF%.*}.corrected.gtf $GFF
+orfanage --stats ${ASS}_stringtie_merged.orfanage.stats --query ${ASS}_stringtie_merged.gtf --output ${ASS}_stringtie_merged.orfanage.gtf --reference $GENOME --rescue --cleant --minlen 20 --mode BEST --non_aug --threads \$SLURM_CPUS_PER_TASK ${GFF%.*}.corrected.gtf
+gffread -g $GENOME -y ${ASS}_stringtie_merged.orfanage.prots.faa ${ASS}_stringtie_merged.orfanage.gtf
+gffread -g $GENOME -w ${ASS}_stringtie_merged.orfanage.mrna.fna ${ASS}_stringtie_merged.orfanage.gtf" > $JOBNAME.cmds
+
+# submit to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+```
+
+### Annotate transcriptome and proteome
+
+#### Annotate transcriptome with BLAST
+
+First, the required NCBI databases were downloaded.
+
+```{bash prep-blast-dbs}
+# setup environment
+CONDA_NAME="genomics"
+# mamba install -n $CONDA_NAME rcorrector agat ncbi-datasets-cli pbgzip google-cloud-sdk awscli
+# download recent BLAST databases
+cd /scratch/project/adna/tools/ncbi_db # on Bunya
+JOBNAME="update-blast-dbs-aria2c"
+DBS="swissprot refseq_protein refseq_rna nt mito taxdb nr"
+DBS="refseq_protein refseq_rna nt nr"
+NCORES=8
+MEM=32
+WALLTIME=20:00:00
+# using rclone and aria2c
+parallel --dry-run "rm {}*.tar.gz.md5; rclone ls --max-depth 1 --include \"{}.*tar.gz*\" BLAST_db:blast/db | gawk '{print \"https://ftp.ncbi.nlm.nih.gov/blast/db/\"\$2}' | aria2c -j \$[SLURM_CPUS_PER_TASK] -x4 -k1M -p -c -i - && cat {}.*tar.gz.md5 | md5sum -c - > {}.md5.check; grep \"OK\" {}.md5.check | cut -f 1 -d: | xargs -n1 -P \$[SLURM_CPUS_PER_TASK] tar -xzvf" ::: $DBS > $JOBNAME.cmds
+
+# using rclone
+parallel --dry-run "rm {}*.tar.gz.md5; rclone copy -P --max-depth 1 --include \"{}*.tar.gz*\" BLAST_db:blast/db /scratch/project/adna/tools/ncbi_db && cat {}*.tar.gz.md5 | md5sum -c - > {}.md5.check; grep \"OK\" {}.md5.check | cut -f 1 -d: | xargs -n1 -P \$[SLURM_CPUS_PER_TASK] tar -xzvf" ::: $DBS > $JOBNAME.cmds
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+
+rclone ls --max-depth 1 --include "nt.*tar.gz*" BLAST_db:blast/db | gawk '{print "https://ftp.ncbi.nlm.nih.gov/blast/db/"$2}' | aria2c -j \$[SLURM_CPUS_PER_TASK] -p -c -i - 
+
+# using update_blastdb.pl
+echo "apptainer exec -B /home/ibar/adna/tools  -B \$TMPDIR:/temp $NXF_SINGULARITY_CACHEDIR/ncbi-blast-latest.img update_blastdb.pl --decompress --verbose --source ncbi --passive --num_threads 0 $DBS" > $JOBNAME.cmds
+
+# submit to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+# check database integrity
+JOBNAME="blast-dbs-check"
+parallel --dry-run "blastdbcheck -db {} " ::: $DBS > $JOBNAME.cmds
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+```
+
+The assembled genome-guided transcriptome was annotated using BLASTn v2.16.0 [@camachoBLASTArchitectureApplications2009] against the non-redundant nucleotide database of the NCBI (`nt`) to achieve more accurate species-specific annotations. Considering that we're dealing with a plant transcriptome (hopefully similar to well-annotated plant species), it may also be useful to annotate the transcripts against the `refseq_rna` database (which only contains curated gene transcripts).  
+BLASTn was run with [blast-nf](https://github.com/IdoBar/nf-blast.git), a Nextflow implementation that uses a "split-combine" approach to split the input query (entire transcriptome or proteome) to smaller "chunks" that are run in parallel on the HPC cluster. 
+
+
+```{bash blast-nf-nt}
+ASS="Papaya_fruit_Sunset_assembly"
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS"
+TRANS="$WORKDIR/${ASS}_stringtie_merged.orfanage.mrna.fna"
+
+mkdir -p $WORKDIR/Annotation && cd $WORKDIR/Annotation
+
+DBS="nt refseq_rna"
+JOBNAME="nf-blastn-tax"
+CHUNKSIZE=500
+CONDA_NAME="base"
+NCORES=4
+MEM=16
+WALLTIME=50:00:00
+# run Nextflow Blast pipeline
+parallel --dry-run "mkdir -p $WORKDIR/Annotation/$JOBNAME-{} && cd $WORKDIR/Annotation/$JOBNAME-{}; ~/bin/nextflow-22.11.1-edge-all run /scratch/project/adna/tools/nf-blast/nf-blast.nf --app blastn --db /scratch/project/adna/tools/ncbi_db/{} --query $TRANS --outfmtString \"6 std stitle staxids ssciname scomname\" --options '-evalue 1e-10 -max_target_seqs 20' --chunkSize $CHUNKSIZE --outDir  $WORKDIR/Annotation/$JOBNAME-{}/results --out ${ASS}_stringtie_merged.orfanage.mrna.{}.tax.outfmt6  -c ~/.nextflow/bunya.config -profile bunya,apptainer,blastn_tax -with-tower" ::: $DBS > $JOBNAME.cmds
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+```
+
+
+
+<!-- ```{bash blast-nf-refseq} -->
+<!-- # setup environment -->
+<!-- ASS="Papaya_fruit_Sunset_assembly" -->
+<!-- WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS" -->
+
+<!-- TRANS="$WORKDIR/${ASS}_stringtie_merged.orfanage.mrna.fna" -->
+
+<!-- cd $WORKDIR -->
+
+<!-- JOBNAME="nf-blastn-refseq-tax" -->
+<!-- DB="refseq_rna" -->
+<!-- mkdir -p $WORKDIR/Annotation/$JOBNAME && cd $WORKDIR/Annotation/$JOBNAME -->
+<!-- # run Nextflow Blast pipeline -->
+<!-- ~/bin/nextflow-22.11.1-edge-all run /scratch/project/adna/tools/blast-nf/main.nf --app blastn --dbDir /scratch/project/adna/tools/ncbi_db --dbName $DB --query $TRANS --outfmt "6 std stitle staxids ssciname scomname" --options '-evalue 1e-10 -max_target_seqs 20' --chunkSize 500 --outdir  $WORKDIR/Annotation/$JOBNAME/results --outfileName ${ASS}_stringtie_merged.orfanage.mrna.$DB.tax.outfmt6  -c ~/.nextflow/bunya.config -profile bunya,apptainer -with-tower -->
+<!-- ``` -->
+
+
+#### Annotate proteome with DIAMOND
+Despite using `blast-nf`, running BLASTp to annotate the predicted proteome was painfully slow (taking ~80 hours for a chunk of 500 proteins) and therefore an alternative approach was taken using DIAMOND v2.1.10 [@buchfinkFastSensitiveProtein2015a], which offers similar accuracy for protein homology searches and produces an identical output to BLASTp, at a much greater speed (up to x1,000 faster). We adapted the `blast-nf` Nextflow pipeline to use DIAMOND (reducing the time to 1.5h for the entire proteome) to search against the NCBI non-redundant protein database (`nr`) to achieve more accurate species-specific annotations. Again, it may also be useful to annotate the proteins against the curated `refseq_protein` database.
+
+```{bash prot-diamond-nf}
+start_long_interactive_job # to be able to use apptainer to download images
+ASS="Papaya_fruit_Sunset_assembly"
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS"
+PROT="$WORKDIR/${ASS}_stringtie_merged.orfanage.prots.faa"
+
+# set environment variables
+PROT_DBS="nr refseq_protein swissprot"
+JOBNAME="nf-dmnd-tax"
+CHUNKSIZE=5000
+CONDA_NAME="base"
+NCORES=4
+MEM=16
+WALLTIME=50:00:00
+# run Nextflow Blast pipeline
+parallel --dry-run "mkdir -p $WORKDIR/Annotation/$JOBNAME-{} && cd $WORKDIR/Annotation/$JOBNAME-{}; ~/bin/nextflow-22.11.1-edge-all run /scratch/project/adna/tools/nf-blast/nf-blast.nf -profile bunya,conda,diamond_tax --query $PROT --app 'diamond blastp' --db ~/adna/tools/ncbi_db/{} --diamondOpts '--very-sensitive -e 1e-10 -k 20' --chunkSize $CHUNKSIZE --outDir $WORKDIR/Annotation/$JOBNAME-{}/results --out ${ASS}_stringtie_merged.orfanage.prots.dmnd.{}.tax.outfmt6  -c ~/.nextflow/bunya.config -with-tower" ::: $PROT_DBS > $JOBNAME.cmds
+# submit to the cluster
+ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm | gawk '{print $4}')
+
+# mkdir -p $WORKDIR/Annotation/Annotation_results/$JOBNAME
+# ~/bin/nextflow-22.11.1-edge-all run ~/adna/tools/nf-blast/nf-blast.nf -profile bunya,apptainer,diamond_tax --query $PROT --app 'diamond blastp' --db ~/adna/tools/ncbi_db/$DB --diamondOpts '--very-sensitive -e 1e-10 -k 20' --chunkSize 10000 --outDir  $WORKDIR/Annotation/$JOBNAME/results --out ${ASS}_stringtie_merged.orfanage.prots.dmnd.$DB.tax.outfmt6  -c ~/.nextflow/bunya.config -with-tower -w $TMPDIR/$JOBNAME/work
+
+```
+
+<!-- Considering that we're dealing with a plant proteome (similar to well-annotated plant species), it may be useful to annotate the proteins against the `refseq_protein` databases (which contain curated proteins only). -->
+
+<!-- ```{bash prot-diamond-nf-refseq} -->
+<!-- ASS="Papaya_fruit_Sunset_assembly" -->
+<!-- WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS" -->
+<!-- PROT="$WORKDIR/${ASS}_stringtie_merged.orfanage.prots.faa" -->
+<!-- # create an output folder -->
+<!-- JOBNAME='nf-diamondblastp-refseq' -->
+<!-- DB='refseq_protein' #swissprot -->
+<!-- mkdir -p $WORKDIR/Annotation/$JOBNAME -->
+<!-- cd $WORKDIR/Annotation/$JOBNAME -->
+
+<!-- # mkdir -p $WORKDIR/Annotation/Annotation_results/$JOBNAME -->
+<!-- ~/bin/nextflow-22.11.1-edge-all run ~/adna/tools/nf-blast/nf-blast.nf -profile bunya,apptainer,diamond_tax --query $PROT --app 'diamond blastp' --db ~/adna/tools/ncbi_db/$DB --diamondOpts '--very-sensitive -e 1e-10 -k 20' --chunkSize 10000 --outDir  $WORKDIR/Annotation/$JOBNAME/results --out ${ASS}_stringtie_merged.orfanage.prots.dmnd.$DB.tax.outfmt6  -c ~/.nextflow/bunya.config -with-tower -->
+
+<!-- ``` -->
+
+#### Functional annotation of proteins
+
+The predicted proteins in the transcriptome were further annotated using InterProScan to assign protein families, motifs and ontologies to assist with transcript-to-gene annotation.
+Notice the issues mentioned above with SignalP and TMHMM and a new one for Phobius (see discussions and solutions on [GitHub](https://github.com/nextgenusfs/funannotate/issues/696#issuecomment-1057663190) and [BioStar](https://www.biostars.org/p/238642/))
+
+```{bash prot-annotation}
+IPSCAN_VERSION=5.66-98.0
+NCORES=12
+MEM=96
+WALLTIME=50:00:00
+# annotate proteins 
+ASS="Papaya_fruit_Sunset_assembly"
+WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS"
+PROT="$WORKDIR/${ASS}_stringtie_merged.orfanage.prots.faa"
+cd $WORKDIR/Annotation
+JOBNAME="Papaya_fruit_prot_ipscan"
+mkdir -p $WORKDIR/Annotation/$JOBNAME
+# prepare the commands (don't forget to remove the asterisk at the end of the proteins!)
+ls -1 $PROT | parallel --dry-run "sed 's/[*]//g' {} > \$TMPDIR/{/} ; apptainer exec -B /home/ibar/scratch/tools -B $WORKDIR/Annotation/$JOBNAME:/output -B \$TMPDIR:/temp $NXF_SINGULARITY_CACHEDIR/interproscan_${IPSCAN_VERSION}.sif /opt/interproscan/interproscan.sh -i /temp/{/} -d /output -pa -dp -goterms -f TSV -T /temp -cpu \$SLURM_CPUS_PER_TASK && gawk '\$4~/PANTHER/' $WORKDIR/Annotation/$JOBNAME/{/}.tsv > $WORKDIR/Annotation/$JOBNAME/{/.}.panther.tsv" > $JOBNAME.cmds
+
+# submit to the cluster
+JOB_ID=$(sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm | gawk '{print $4}')
+
+# Copy html files to SharePoint
+rclone copy -P --ignore-checksum --ignore-size --include "**/*.html" $WORKDIR/Annotation "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/$ASS/Annotation"
+# Copy files to SharePoint
+rclone copy -P --exclude "**/*.html" $WORKDIR/Annotation "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/$ASS/Annotation"
+
+
+
+```
+
+
+### Gene Expression Analysis with `Salmon`
+*This is an alternative to using the counts generated by `ballgown` in Section \@ref(tuxedo).*  
+The transcriptome assembly was used as a reference to quantify gene/transcript abundance using [Salmon](https://salmon.readthedocs.io/en/latest/salmon.html) v1.10.3 [@patroSalmonProvidesFast2017; @loveSwimmingDownstreamStatistical2018]. We've used the genome sequence as a "decoy" when preparing the transcriptome indices, as recommended in the [documentation](https://salmon.readthedocs.io/en/latest/salmon.html#preparing-transcriptome-indices-mapping-based-mode).
+<!-- or [Kallisto](https://pachterlab.github.io/kallisto/about) [@brayNearoptimalProbabilisticRNAseq2016] -->
+
+```{bash salmon-quant}
+CONDA_NAME=picard
+mamba install -n $CONDA_NAME kallisto salmon 
+WORKDIR="/scratch/project/adna/Papaya"
+TRANS="$WORKDIR/SunSet_reference_genome/GWHBFSD00000000.RNA.fasta.gz"
+GENOME="$WORKDIR/SunSet_reference_genome/GWHBFSD00000000.genome.fasta.gz"
+GFF="/scratch/project/adna/Papaya/SunSet_reference_genome/GWHBFSD00000000.gff"
+# unzip gene models
+pigz -cd $GFF.gz > GWHBFSD00000000.gff
+cd $WORKDIR
+# Create a reference (combined transcriptome and genome as decoy) 
+
+JOBNAME="Salmon_index"
+NCORES=12
+MEM=64
+WALLTIME=10:00:00
+echo "zgrep \"^>\" $GENOME | cut -d \" \" -f 1 | sed -e 's/>//g' > decoys.txt; cat $TRANS $GENOME > Cp_Sunset_transgenome.fasta.gz; salmon index -t Cp_Sunset_transgenome.fasta.gz --decoys decoys.txt -k 31 -p \$SLURM_CPUS_PER_TASK -i Cp_Sunset_transgenome.index" > $JOBNAME.cmds
+
+# submit the job array to the cluster
+sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm
+
+# run Salmon quant
+
+JOBNAME="Salmon_quant"
+RUNDIR="$WORKDIR/Gene_expression/$JOBNAME"
+mkdir -p $RUNDIR && cd $RUNDIR
+# create tx2gene map
+#echo "head -n1 $WORKDIR/Mnova_denovotranscript2/assembly_results/tx2gene/all_assembled.tx2gene.tsv > all_assembled.okay.tx2gene.tsv
+#grep ">" $TRANS | gawk '{printf "%s\t\n", $1}' | sed -r 's/>//' > all_assembled.okay.headers
+#grep -f all_assembled.okay.headers $WORKDIR/Mnova_denovotranscript2/assembly_results/tx2gene/all_assembled.tx2gene.tsv >> all_assembled.okay.tx2gene.tsv" > tx2gene-map.cmds
+# sbatch --job-name=tx2gene-map --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=tx2gene-map.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm
+
+# Prepare Salmon commands (probably better to use --numGibbsSamples 50 instead of 1000 Bootstraps)
+parallel --dry-run --rpl "{sample} s:.+/(.+)_R1.trimmed.fastq.gz:\1:" --rpl "{read2} s:_R1:_R2:" "salmon quant -i $WORKDIR/Murdoch_sequencing/Flavour_RNAseq/Cp_Sunset_transgenome.index -l A -1 {} -2 {read2} -o {sample}_salmon_eq --numBootstraps 1000 --seqBias --dumpEq -p \$SLURM_CPUS_PER_TASK -g $WORKDIR/Murdoch_sequencing/Flavour_RNAseq/GWHBFSD00000000.gff" ::: $(ls -1 $WORKDIR/Murdoch_sequencing/Flavour_RNAseq/papaya_rnaseq/fastp/*_R1.trimmed.fastq.gz ) > $JOBNAME.cmds
+
+# submit the job array to the cluster
+sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/array.slurm
+
+# upload results to SharePoint
+rclone copy -P -L --exclude "**/*.html" $WORKDIR/Gene_expression "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/Gene_expression"
+# repeat to copy html files
+rclone copy -P -L --ignore-checksum --ignore-size --include "**/*.html" $WORKDIR/Gene_expression "Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/Gene_expression"
+```
+
+Expression-based clustering of transcripts was performed with a modified version of  [RapClust](https://github.com/IdoBar/RapClust@patch-2) [@trapnellDifferentialAnalysisGene2013].
+*COnsider using [Grouper](https://github.com/COMBINE-lab/grouper) instead [@malikGrouperGraphbasedClustering2018]*
+
+```{bash rapclust}
+CONDA_NAME=genomics
+conda activate $CONDA_NAME
+mamba install mcl # need to install mcl and rapclust graalpy-graalvm
+# install updated version of rapclust
+pip install git+https://github.com/IdoBar/RapClust@patch-2
+# mamba install -n $CONDA_NAME kallisto salmon rapclust
+WORKDIR="/home/ibar/adna/sandbox/OTE14085"
+cd $WORKDIR/Gene_expression/Salmon_quant_20_05_2025
+
+# unzip the eq_classes files
+# find . -name eq_classes.txt.gz | parallel  "gzip -cd {} > {.}"
+
+JOBNAME="Mnova_rapclust"
+NCORES=12
+MEM=64
+WALLTIME=10:00:00
+# prepare config file for RapClust
+echo "conditions:
+  - Mnova_EM
+  - Mnova_LM
+samples:" > $JOBNAME.yaml
+find . -maxdepth 1 -type d -name  "*N*_salmon_eq" | sort | grep -v "16S23" | gawk -F "/" 'BEGIN{printf "  Mnova_EM:\n"}{printf "    - %s\n", $2}' >> $JOBNAME.yaml
+
+find . -maxdepth 1 -type d -name  "*S*_salmon_eq" | sort | grep -v "16S23" | gawk -F "/" 'BEGIN{printf "  Mnova_LM:\n"}{printf "    - %s\n", $2}' >> $JOBNAME.yaml
+echo "outdir: $JOBNAME" >> $JOBNAME.yaml
+
+# prepare SLURM script 
+echo "find . -name eq_classes.txt.gz | parallel  \"gzip -cd {} > {.}\"; RapClust --config $JOBNAME.yaml" > $JOBNAME.cmds
+# submit the job array to the cluster
+sbatch --job-name=$JOBNAME --cpus-per-task=$NCORES --mem=${MEM}G --time=$WALLTIME --export=ALL,CMDS_FILE=$JOBNAME.cmds,CONDA_NAME=$CONDA_NAME ~/bin/serial_jobs_run.slurm
+
+```
+
+All the generated data was copied to a cloud-based storage (Griffith Research Space and SharePoint)
+
+```{bash rclone-copy}
+WORKDIR=/home/ibar/adna/Oyster_QX_Disease
+rclone copy -P -L --exclude "**work/*" --exclude "**nextflow/*" --exclude "**.nextflow*" --exclude "**/*.html" $WORKDIR Erika_PhD:General/Erika_Whale_fasting_genomics/OTE14085
+```
+
+Then repeat with the following flags to copy html files (a [known SharePoint-specific issue](https://rclone.org/onedrive/#unexpected-file-size-hash-differences-on-sharepoint){target="_blank"})
+```{bash rclone-copy2}
+rclone copy -P -L --ignore-checksum --ignore-size --include "**/*.html" $WORKDIR Erika_PhD:General/Erika_Whale_fasting_genomics/OTE14085/
+```
+
+
+## General information
+
+This document was last updated at `r Sys.time()` using R Markdown (built with `r R.version.string`). The source code for this webpage can be found at <https://github.com/IdoBar/Papaya_fruit_transcriptome_analysis> (or via the GitHub logo at the top right corner of this page).  
+
+Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. It is especially powerful at authoring documents and reports which include code and can execute code and use the results in the output. For more details on using R Markdown see <http://rmarkdown.rstudio.com>, [R Markdown: The Definitive Guide](https://bookdown.org/yihui/rmarkdown/) and [Rmarkdown cheatsheet](https://rstudio.github.io/cheatsheets/html/rmarkdown.html).
+
+------------------------------------------------------------------------
+
+## Bibliography
+
