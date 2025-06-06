@@ -352,10 +352,10 @@ ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-p
 ```
 
 The assembled genome-guided transcriptome was annotated using BLASTn v2.16.0 [@camachoBLASTArchitectureApplications2009] against the non-redundant nucleotide database of the NCBI (`nt`) to achieve more accurate species-specific annotations. Considering that we're dealing with a plant transcriptome (hopefully similar to well-annotated plant species), it may also be useful to annotate the transcripts against the `refseq_rna` database (which only contains curated gene transcripts).  
-BLASTn was run with [blast-nf](https://github.com/IdoBar/nf-blast.git), a Nextflow implementation that uses a "split-combine" approach to split the input query (entire transcriptome or proteome) to smaller "chunks" that are run in parallel on the HPC cluster. 
+BLASTn was run with [nf-blast](https://github.com/IdoBar/nf-blast.git), a Nextflow implementation that uses a "split-combine" approach to split the input query (entire transcriptome or proteome) to smaller "chunks" that are run in parallel on the HPC cluster. 
 
 
-```{bash blast-nf-nt}
+```{bash nf-blast-nt}
 ASS="Papaya_fruit_Sunset_assembly"
 WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS"
 TRANS="$WORKDIR/${ASS}_stringtie_merged.orfanage.mrna.fna"
@@ -377,7 +377,7 @@ ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-p
 
 
 
-<!-- ```{bash blast-nf-refseq} -->
+<!-- ```{bash nf-blast-refseq} -->
 <!-- # setup environment -->
 <!-- ASS="Papaya_fruit_Sunset_assembly" -->
 <!-- WORKDIR="/scratch/project/adna/Papaya/Murdoch_sequencing/Flavour_RNAseq/$ASS" -->
@@ -390,12 +390,12 @@ ARRAY_ID=$(sbatch -a 1-$(cat $JOBNAME.cmds | wc -l) --job-name=$JOBNAME --cpus-p
 <!-- DB="refseq_rna" -->
 <!-- mkdir -p $WORKDIR/Annotation/$JOBNAME && cd $WORKDIR/Annotation/$JOBNAME -->
 <!-- # run Nextflow Blast pipeline -->
-<!-- ~/bin/nextflow-22.11.1-edge-all run /scratch/project/adna/tools/blast-nf/main.nf --app blastn --dbDir /scratch/project/adna/tools/ncbi_db --dbName $DB --query $TRANS --outfmt "6 std stitle staxids ssciname scomname" --options '-evalue 1e-10 -max_target_seqs 20' --chunkSize 500 --outdir  $WORKDIR/Annotation/$JOBNAME/results --outfileName ${ASS}_stringtie_merged.orfanage.mrna.$DB.tax.outfmt6  -c ~/.nextflow/bunya.config -profile bunya,apptainer -with-tower -->
+<!-- ~/bin/nextflow-22.11.1-edge-all run /scratch/project/adna/tools/nf-blast/main.nf --app blastn --dbDir /scratch/project/adna/tools/ncbi_db --dbName $DB --query $TRANS --outfmt "6 std stitle staxids ssciname scomname" --options '-evalue 1e-10 -max_target_seqs 20' --chunkSize 500 --outdir  $WORKDIR/Annotation/$JOBNAME/results --outfileName ${ASS}_stringtie_merged.orfanage.mrna.$DB.tax.outfmt6  -c ~/.nextflow/bunya.config -profile bunya,apptainer -with-tower -->
 <!-- ``` -->
 
 
 #### Annotate proteome with DIAMOND
-Despite using `blast-nf`, running BLASTp to annotate the predicted proteome was painfully slow (taking ~80 hours for a chunk of 500 proteins) and therefore an alternative approach was taken using DIAMOND v2.1.10 [@buchfinkFastSensitiveProtein2015a], which offers similar accuracy for protein homology searches and produces an identical output to BLASTp, at a much greater speed (up to x1,000 faster). We adapted the `blast-nf` Nextflow pipeline to use DIAMOND (reducing the time to 1.5h for the entire proteome) to search against the NCBI non-redundant protein database (`nr`) to achieve more accurate species-specific annotations. Again, it may also be useful to annotate the proteins against the curated `refseq_protein` database.
+Despite using `nf-blast`, running BLASTp to annotate the predicted proteome was painfully slow (taking ~80 hours for a chunk of 500 proteins) and therefore an alternative approach was taken using DIAMOND v2.1.10 [@buchfinkFastSensitiveProtein2015a], which offers similar accuracy for protein homology searches and produces an identical output to BLASTp, at a much greater speed (up to x1,000 faster). We adapted the `nf-blast` Nextflow pipeline to use DIAMOND (reducing the time to 1.5h for the entire proteome) to search against the NCBI non-redundant protein database (`nr`) to achieve more accurate species-specific annotations. Again, it may also be useful to annotate the proteins against the curated `refseq_protein` database.
 
 ```{bash prot-diamond-nf}
 start_long_interactive_job # to be able to use apptainer to download images
