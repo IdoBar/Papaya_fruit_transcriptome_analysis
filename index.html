@@ -3373,7 +3373,7 @@ border-radius: 0px;
 <div id="objectives" class="section level3" number="1.1.1">
 <h3><span class="header-section-number">1.1.1</span> Objectives</h3>
 <ol style="list-style-type: decimal">
-<li>Assemble the <em>Carica papaya</em> mature fruit transcriptome<br />
+<li>Assemble the <em>Carica papaya</em> ripe fruit transcriptome<br />
 </li>
 <li>Identify genes that play a role in metabolic pathways of key flavour-determining volatiles, sugars and metabolites in papaya through network analysis of co-expressed and differential expression of genes correlated to metabolites’ concentration in 10 papaya genotypes<br />
 </li>
@@ -3817,7 +3817,7 @@ The transcriptome assembly was used as a reference to quantify gene/transcript a
 <span id="cb10-40"><a href="#cb10-40" tabindex="-1"></a><span class="co"># repeat to copy html files</span></span>
 <span id="cb10-41"><a href="#cb10-41" tabindex="-1"></a><span class="ex">rclone</span> copy <span class="at">-P</span> <span class="at">-L</span> <span class="at">--ignore-checksum</span> <span class="at">--ignore-size</span> <span class="at">--include</span> <span class="st">&quot;**/*.html&quot;</span> <span class="va">$WORKDIR</span>/Gene_expression <span class="st">&quot;Papaya_genomics:Research Projects/Josh_PhD_Flavour_Genomics/Project_Information/Experiments/RNAseq/Flavour_RNAseq/Gene_expression&quot;</span></span></code></pre></div>
 <p>Expression-based clustering of transcripts was performed with a modified version of <a href="https://github.com/IdoBar/RapClust@patch-2">RapClust</a> <span class="citation">(Trapnell <em>et al.</em> 2013)</span>.
-<em>COnsider using <a href="https://github.com/COMBINE-lab/grouper">Grouper</a> instead <span class="citation">(Malik <em>et al.</em> 2018)</span></em></p>
+<em>Consider using <a href="https://github.com/COMBINE-lab/grouper">Grouper</a> instead <span class="citation">(Malik <em>et al.</em> 2018)</span></em></p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="va">CONDA_NAME</span><span class="op">=</span>genomics</span>
 <span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="ex">conda</span> activate <span class="va">$CONDA_NAME</span></span>
 <span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a><span class="ex">mamba</span> install mcl <span class="co"># need to install mcl and rapclust graalpy-graalvm</span></span>
@@ -3857,7 +3857,7 @@ The transcriptome assembly was used as a reference to quantify gene/transcript a
 </div>
 <div id="general-information" class="section level2" number="1.4">
 <h2><span class="header-section-number">1.4</span> General information</h2>
-<p>This document was last updated at 2025-06-06 07:48:41 using R Markdown (built with R version 4.2.1 (2022-06-23 ucrt)). The source code for this webpage can be found at <a href="https://github.com/IdoBar/Papaya_fruit_transcriptome_analysis" class="uri">https://github.com/IdoBar/Papaya_fruit_transcriptome_analysis</a> (or via the GitHub logo at the top right corner of this page).</p>
+<p>This document was last updated at 2025-06-06 08:11:49 using R Markdown (built with R version 4.2.1 (2022-06-23 ucrt)). The source code for this webpage can be found at <a href="https://github.com/IdoBar/Papaya_fruit_transcriptome_analysis" class="uri">https://github.com/IdoBar/Papaya_fruit_transcriptome_analysis</a> (or via the GitHub logo at the top right corner of this page).</p>
 <p>Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. It is especially powerful at authoring documents and reports which include code and can execute code and use the results in the output. For more details on using R Markdown see <a href="http://rmarkdown.rstudio.com" class="uri">http://rmarkdown.rstudio.com</a>, <a href="https://bookdown.org/yihui/rmarkdown/">R Markdown: The Definitive Guide</a> and <a href="https://rstudio.github.io/cheatsheets/html/rmarkdown.html">Rmarkdown cheatsheet</a>.</p>
 <hr />
 </div>

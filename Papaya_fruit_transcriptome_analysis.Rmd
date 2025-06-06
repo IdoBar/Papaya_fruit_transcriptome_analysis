@@ -43,7 +43,7 @@ pacman::p_load(char = basename(fav_packages))
 
 ### Objectives
 
-1. Assemble the _Carica papaya_ mature fruit transcriptome  
+1. Assemble the _Carica papaya_ ripe fruit transcriptome  
 2. Identify genes that play a role in metabolic pathways of key flavour-determining volatiles, sugars and metabolites in papaya through network analysis of co-expressed and differential expression of genes correlated to metabolites' concentration in 10 papaya genotypes    
 3. Develop pipeline that uses state-of-the-art graph genome approach to utilise papaya pangenome as reference for gene expression analysis      
 
@@ -521,7 +521,7 @@ rclone copy -P -L --ignore-checksum --ignore-size --include "**/*.html" $WORKDIR
 ```
 
 Expression-based clustering of transcripts was performed with a modified version of  [RapClust](https://github.com/IdoBar/RapClust@patch-2) [@trapnellDifferentialAnalysisGene2013].
-*COnsider using [Grouper](https://github.com/COMBINE-lab/grouper) instead [@malikGrouperGraphbasedClustering2018]*
+*Consider using [Grouper](https://github.com/COMBINE-lab/grouper) instead [@malikGrouperGraphbasedClustering2018]*
 
 ```{bash rapclust}
 CONDA_NAME=genomics
